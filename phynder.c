@@ -2,10 +2,10 @@
  *  Author: Richard Durbin (rd109@cam.ac.uk)
  *  Copyright (C) Richard Durbin, Cambridge University, 2019
  *-------------------------------------------------------------------
- * Description:
+ * Description: likelihood applications on trees for ancient Y data and more
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 19 18:35 2019 (rd109)
+ * Last edited: Dec 20 18:01 2019 (rd109)
  * Created: Sun Nov 17 19:52:20 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -18,7 +18,8 @@
 
 static double transitionRate = 1.33 ; // expect ratio 4:1 for ts:tv rates
 static double transversionRate = 0.33 ; // these values give mean 1.0 for 2:1 ts:tv events
-
+static double siteThreshold = -10.0 ; // log likelihood threshold to accept a site pattern
+static BOOL isUltrametric = FALSE ;
 static BOOL isVerbose = FALSE ;
 
 static int baseMap[128] ;
@@ -33,6 +34,8 @@ void usage (void)
   fprintf (stderr, "  -ts <transition rate>    [%.4f]\n", transitionRate) ;
   fprintf (stderr, "  -tv <transversion rate>  [%.4f]\n", transversionRate) ;
   fprintf (stderr, "  -B <branch file name>    output branch positions of tree variants\n") ;
+  fprintf (stderr, "  -T <thresh>              site likelihood threshold, zero means no threshold [%.1f]\n", siteThreshold) ;
+  fprintf (stderr, "  -U                       make tree ultrametric - all leaves equidistant from root\n") ;
   fprintf (stderr, "  -h                       print this message\n") ;
   fprintf (stderr, "  -V                       verbose - print extra info\n") ;
   exit (0) ;
@@ -60,17 +63,20 @@ int main (int argc, char *argv[])
 	TreeNode *n = readBinaryNewickTree (f) ;
 	fclose (f) ;
 	t = treeCreate (n) ;
+	treeNodeDestroy (n) ;
 	printf ("read tree with %d nodes and %d leaves from %s\n",
 		arrayMax(t->a), (arrayMax(t->a)+1)/2, argv[1]) ;
-	treeNodeDestroy (n) ;
+	timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-v"))
       { vt = vcfRead (argv[1]) ;
+	timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-q"))
       { vq = vcfRead (argv[1]) ;
+	timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-ts") && argc > 1)
@@ -85,6 +91,10 @@ int main (int argc, char *argv[])
       { if (!(fB = fopen (argv[1], "w"))) die ("failed to write branch file %s", argv[1]) ;
 	argc -= 2 ; argv += 2 ;
       }
+    else if (!strcmp (*argv, "-T") && argc > 1)
+      { siteThreshold = atof (argv[1]) ;
+	argc -= 2 ; argv += 2 ;
+      }
     else if (!strcmp (*argv, "-V"))
       { isVerbose = TRUE ;
 	--argc ; ++argv ;
@@ -94,8 +104,7 @@ int main (int argc, char *argv[])
 
   if (!t) die ("must specify a tree with -t argument") ;
 
-  treeBalance (t) ;
-  timeUpdate (stdout) ;
+  if (isUltrametric) { treeBalance (t) ; timeUpdate (stdout) ; }
   
   Array transitionEdges = treeBuildEdges (t, transitionRate) ;
   Array transversionEdges = treeBuildEdges (t, transversionRate) ;
@@ -124,14 +133,15 @@ int main (int argc, char *argv[])
   // build inside and outside log likeliHoods for each site for each node in tree
   // indirection via siteIndex so that info for sites with identical genotypes is shared
   TreeScore **scores = new0(arrayMax(vt->sites), TreeScore*) ; // more than needed but cheap
-  int *siteIndex = new(arrayMax(vt->sites), int) ;
+  int *siteIndex = new0(arrayMax(vt->sites), int) ;
   DICT *gtDict = dictCreate (4*arrayMax(vt->sites)) ;
+  dictAdd (gtDict, "burn the first siteIndex entry", 0) ; // needed so siteIndex[i] = 0 for bad sites
   HASH *posHash = hashCreate (4*arrayMax(vt->sites)) ;
   BOOL *isAnc1 = new (arrayMax(vt->sites), BOOL) ;
   double *llSite = new (arrayMax(vt->sites), double) ;
 
   Array hMiss = arrayCreate (256, int) ; // histogram
-  int nWithMiss = 0, totMiss = 0 ;
+  int nWithMiss = 0, totMiss = 0, nThresh = 0, nBadGT = 0, nMonomorphic = 0, nGood = 0 ;
   for (i = 0 ; i < arrayMax(vt->sites) ; ++i)
     { VcfSite *s = arrp(vt->sites, i, VcfSite) ;
       if (!hashAdd (posHash, HASH_INT(POS_HASH(s)), &k) || k != i)
@@ -144,41 +154,58 @@ int main (int argc, char *argv[])
 	  case 1: ++nMiss ; break ; case 2: ++n0 ; break ; case 3: ++n1 ; break ;
 	  default: ++nBad ;
 	  }
-      if (nBad) { fprintf (stderr, "bad gt %d for site %d\n", nBad, i) ; continue ; }
-      if (!n1) { fprintf (stderr, "no gt1 for site %d\n", i) ; continue ; }
+      if (nBad)
+	{ if (isVerbose) fprintf (stderr, "bad gt %d for site %d\n", nBad, i) ;
+	  ++nBadGT ;
+	  continue ;
+	}
+      if (!n1)
+	{ if (isVerbose) fprintf (stderr, "no gt1 for site %d\n", i) ;
+	  ++nMonomorphic ;
+	  continue ;
+	}
       if (nMiss) { ++nWithMiss ; totMiss += nMiss ; }
 
-      if (dictAdd (gtDict, s->gt, &siteIndex[i])) // a new site pattern
+      if (dictAdd (gtDict, s->gt, &k)) // a new site pattern
 	{ char R = toupper(s->ref), A = toupper(s->alt) ;
 	  if ((R == 'A' && A == 'G') || (R == 'C' && A == 'T') ||
 	      (R == 'G' && A == 'A') || (R == 'T' && A == 'C'))
-	    scores[siteIndex[i]] = treeBuildScores (t, s->gt, tree2vcf, transitionEdges) ;
+	    scores[k] = treeBuildScores (t, s->gt, tree2vcf, transitionEdges) ;
 	  else
-	    scores[siteIndex[i]] = treeBuildScores (t, s->gt, tree2vcf, transversionEdges) ;
+	    scores[k] = treeBuildScores (t, s->gt, tree2vcf, transversionEdges) ;
 	  if (isVerbose) ++array(hMiss, nMiss, int) ;
 	}
-      TreeScore *score = scores[siteIndex[i]] ;
+      TreeScore *score = scores[k] ;
       if (score[0].below.s0 < score[0].below.s1)
 	{ isAnc1[i] = TRUE ;
-	  llSite[i] = score[0].below.s1 + log(1. + exp(score[0].below.s0-score[0].below.s1)) ;
+	  llSite[k] = score[0].below.s1 + log(1. + exp(score[0].below.s0-score[0].below.s1)) ;
 	}
       else
 	{ isAnc1[i] = FALSE ;
-	  llSite[i] = score[0].below.s0 + log(1. + exp(score[0].below.s1-score[0].below.s0)) ;
+	  llSite[k] = score[0].below.s0 + log(1. + exp(score[0].below.s1-score[0].below.s0)) ;
 	}
+      if (siteThreshold && llSite[k] < siteThreshold) { ++nThresh ; continue ; }
+
+      siteIndex[i] = k ;  // only set the siteIndex for good sites, else 0 indicating bad
+      ++nGood ;
     }
-  printf ("built scores for %d gt patterns for %d sites\n", dictMax(gtDict), arrayMax(vt->sites)) ;
-  if (nWithMiss) printf ("%d sites had missing genotypes, mean %.1f\n",
+  printf ("built scores for %d gt patterns\n", dictMax(gtDict)) ;
+  printf ("using %d good sites\n", nGood) ;
+  if (nMonomorphic) printf ("  %d sites rejected because monomorphic\n", nMonomorphic) ;
+  if (nBadGT) printf ("  %d sites rejected because monomorphic\n", nMonomorphic) ;
+  if (nThresh) printf ("  %d sites rejected because likelihood below threshold %.1f\n", nThresh, siteThreshold) ;
+  if (nWithMiss) printf ("  %d sites had missing genotypes, mean %.1f\n",
 			 nWithMiss, totMiss / (double) nWithMiss) ;
   if (isVerbose)
     for (i = 0 ; i < arrayMax (hMiss) ; ++i)
-      if ((j = arr(hMiss,i,int))) printf ("  %d site patterns with %d genotypes missing\n", j, i) ;
+      if ((j = arr(hMiss,i,int))) printf ("    %d site patterns with %d genotypes missing\n", j, i) ;
   arrayDestroy (hMiss) ;
   timeUpdate (stdout) ;
 
   if (fB)
     { for (i = 0 ; i < arrayMax(vt->sites) ; ++i)
-	{ VcfSite *s = arrp(vt->sites, i, VcfSite) ;
+	{ if (!siteIndex[i]) continue ;
+	  VcfSite *s = arrp(vt->sites, i, VcfSite) ;
 	  double best = 0., best2 = 0. ; int kBest, kBest2 ;
 	  TreeScore *score = scores[siteIndex[i]] ;
 	  for (k = 1 ; k < arrayMax(t->a) ; ++k)
@@ -199,18 +226,18 @@ int main (int argc, char *argv[])
     { if (strcmp (vq->seqName, vt->seqName))
 	die ("query seqName %s != reference %s", vq->seqName, vt->seqName) ;
 
-      printf ("query %d samples at %d sites to tree\n", dictMax(vq->samples), arrayMax(vq->sites)) ;
+      printf ("query %d samples with data at %d sites,", dictMax(vq->samples), arrayMax(vq->sites)) ;
       
-      int *siteMap = new (arrayMax(vq->sites), int) ; // index of vq site in vt site list
-      int nSitesMapped = arrayMax(vq->sites) ;
+      int *siteMap = new0 (arrayMax(vq->sites), int) ; // index of vq site in vt site list
+      int nSitesMapped = 0 ;
       for (i = 0 ; i < arrayMax (vq->sites) ; ++i)
 	{ VcfSite *s = arrp (vq->sites, i, VcfSite) ;
-	  if (hashFind (posHash, HASH_INT(POS_HASH(s)), &k))
-	    siteMap[i] = k ;
-	  else
-	    { siteMap[i] = -1 ; --nSitesMapped ; }
+	  if (hashFind (posHash, HASH_INT(POS_HASH(s)), &k) && siteIndex[k])
+	    { siteMap[i] = siteIndex[k] ;
+	      ++nSitesMapped ;
+	    }
 	}
-      printf ("  matched %d sites\n", nSitesMapped) ;
+      printf (" matching %d sites in the tree\n", nSitesMapped) ;
       if (!nSitesMapped) die ("no shared sites to map query samples with\n") ;
 
       double *qScore = new (arrayMax(t->a), double) ;
@@ -219,8 +246,8 @@ int main (int argc, char *argv[])
 	  double baseScore = 0. ;
 	  int n = 0 ;
 	  for (i = 0 ; i < arrayMax (vq->sites) ; ++i)
-	    if (siteMap[i] >= 0)
-	      { TreeScore *score = scores[siteIndex[siteMap[i]]] ;
+	    if (siteMap[i])
+	      { TreeScore *score = scores[siteMap[i]] ;
 		VcfSite *sq = arrp (vq->sites, i, VcfSite) ;
 		if (sq->gt[j] > 1)
 		  { ++n ;
