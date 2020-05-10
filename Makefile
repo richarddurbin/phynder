@@ -12,6 +12,9 @@ all: phynder
 clean:
 	$(RM) -r phynder *.o *~ *test *.dSYM
 
+install: phynder
+	cp phynder ~/bin
+
 ### header dependencies
 
 UTILS_HEADERS=utils.h array.h hash.h dict.h

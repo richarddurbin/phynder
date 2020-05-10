@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 19 10:53 2019 (rd109)
+ * Last edited: May 10 13:58 2020 (rd109)
  * Created: Sat Nov 16 10:07:06 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -119,22 +119,27 @@ void treeBalance (Tree *t)
 
 typedef struct { double pFlip, pStick ; } TreeEdge ;
 
-Array treeBuildEdges (Tree *t, double rate)
+Array treeBuildEdges (Tree *t, double rate, double *worst)
 {
   Array a = arrayCreate (arrayMax(t->a), TreeEdge) ;
   int i ;
+  double shortest = 0. ;
   for (i = arrayMax(t->a) ; i-- ; )
     { TreeElement *e = arrp (t->a, i, TreeElement) ;
       TreeEdge *d = arrayp(a, i, TreeEdge) ;
       if (e->length)
 	{ d->pFlip = (1. - exp(-rate*e->length)) / 2. ;
 	  d->pStick = (1. + exp(-rate*e->length)) / 2. ;
+	  if (!shortest || e->length < shortest)
+	    { *worst = log(d->pFlip) ;
+	      shortest = e->length ;
+	    }
 	}
     }
   return a ;
 }
 
-static inline void addScore (LogLikelihood *a, LogLikelihood *b, TreeEdge *e)
+static inline void addEdge (LogLikelihood *a, LogLikelihood *b, TreeEdge *e)
 {
   if (b->s0 == b->s1) // e.g. at empty leaves
     { a->s0 += b->s0 ; a->s1 += b->s1 ; }
@@ -146,54 +151,97 @@ static inline void addScore (LogLikelihood *a, LogLikelihood *b, TreeEdge *e)
   assert (!isnan(a->s0) && !isnan(a->s1)) ;
 }
 
-TreeScore *treeBuildScores (Tree *t, char *gt, int* tree2vcf, Array edges)
+static LogLikelihood *treeBuildBelow (Tree *t, char *gt, int* tree2vcf, Array edges)
 {
+  // below[i].s0 = p(data below edge i | 0 at bottom of edge i)
   static float LEAF_MATCH = -0.00010005, LEAF_MISMATCH = -9.21034037 ; // log(0.9999), log(0.0001)
+  LogLikelihood *below = new0 (arrayMax(t->a), LogLikelihood) ;
   int i ;
-  TreeScore *scores = new0 (arrayMax(t->a), TreeScore) ;
-  // first make scores below by running from bottom up the tree
   for (i = arrayMax(t->a) ; i-- ; ) // NB important i is descending for post-order
     { TreeElement *e = arrp (t->a, i, TreeElement) ;
-      LogLikelihood *si = &(scores[i].below) ;
+      LogLikelihood *bi = &below[i] ;
       if (e->left) // an internal node
-	{ addScore (si, &scores[e->left].below, arrp(edges,e->left,TreeEdge)) ;
-	  addScore (si, &scores[e->right].below, arrp(edges,e->right,TreeEdge)) ;
+	{ addEdge (bi, &below[e->left], arrp(edges,e->left,TreeEdge)) ;
+	  addEdge (bi, &below[e->right], arrp(edges,e->right,TreeEdge)) ;
 	  if (!i && e->parent) // third branch in unrooted tree
-	    addScore (si, &scores[e->parent].below, arrp(edges,e->parent,TreeEdge)) ;
+	    addEdge (bi, &below[e->parent], arrp(edges,e->parent,TreeEdge)) ;
 	}
       else // a leaf
 	switch (gt[tree2vcf[i]])
 	  {
-	  case 3: si->s0 = LEAF_MISMATCH ; si->s1 = LEAF_MATCH ; break ;
-	  case 2: si->s0 = LEAF_MATCH ; si->s1 = LEAF_MISMATCH ; break ;
-	  case 1: si->s0 = si->s1 = 0. ; break ;
+	  case 3: bi->s0 = LEAF_MISMATCH ; bi->s1 = LEAF_MATCH ; break ;
+	  case 2: bi->s0 = LEAF_MATCH ; bi->s1 = LEAF_MISMATCH ; break ;
+	  case 1: bi->s0 = bi->s1 = 0. ; break ;
 	  default: // die ("unknown gt %d at position %d", gt[tree2vcf[i]], i) ;
 	    fprintf (stderr, "bad gt %d at position %d %d\n", gt[tree2vcf[i]], i, tree2vcf[i]) ;
 	  }
     }
-  // then above, running from top down the tree
+  return below ;
+}
+
+static LogLikelihood *treeBuildAbove (Tree *t, LogLikelihood *below, Array edges)
+{
+  // above[i].s0 = p(data not below edge i | 0 at top of edge i)
+  LogLikelihood *above = new0 (arrayMax(t->a), LogLikelihood) ;
+  int i ;
   for (i = 0 ; i < arrayMax(t->a) ; i++ ) // now i is ascending order for pre-order
     { TreeElement *e = arrp (t->a, i, TreeElement) ;
       if (!e->left) continue ; // make for the children of i
-      LogLikelihood *sl = &(scores[e->left].above), *sr = &(scores[e->right].above) ;
-      addScore (sl, &(scores[e->right].below), arrp(edges,e->right,TreeEdge)) ; // NB below
-      addScore (sr, &(scores[e->left].below), arrp(edges,e->left,TreeEdge)) ;
+      LogLikelihood *al = &above[e->left], *ar = &above[e->right] ;
+      addEdge (al, &below[e->right], arrp(edges,e->right,TreeEdge)) ; // NB below
+      addEdge (ar, &below[e->left], arrp(edges,e->left,TreeEdge)) ;
       if (i) // not the root
-	{ addScore (sl, &(scores[i].above), arrp(edges,i,TreeEdge)) ;
-	  addScore (sr, &(scores[i].above), arrp(edges,i,TreeEdge)) ;
+	{ addEdge (al, &above[i], arrp(edges,i,TreeEdge)) ;
+	  addEdge (ar, &above[i], arrp(edges,i,TreeEdge)) ;
 	}
       else if (e->parent) // third branch in unrooted tree 
-	{ addScore (sl, &(scores[e->parent].below), arrp(edges,e->parent,TreeEdge)) ;
-	  addScore (sr, &(scores[e->parent].below), arrp(edges,e->parent,TreeEdge)) ;
-	  LogLikelihood *sp = &(scores[e->parent].above) ;
-	  addScore (sp, &(scores[e->right].below), arrp(edges,e->right,TreeEdge)) ; // NB below
-	  addScore (sp, &(scores[e->left].below), arrp(edges,e->left,TreeEdge)) ;
+	{ addEdge (al, &below[e->parent], arrp(edges,e->parent,TreeEdge)) ;
+	  addEdge (ar, &below[e->parent], arrp(edges,e->parent,TreeEdge)) ;
+	  LogLikelihood *ap = &above[e->parent] ;
+	  addEdge (ap, &below[e->right], arrp(edges,e->right,TreeEdge)) ; // NB below
+	  addEdge (ap, &below[e->left], arrp(edges,e->left,TreeEdge)) ;
 	}
     }
+  return above ;
+}
+
+LogLikelihood *treeBuildScores (Tree *t, char *gt, int* tree2vcf, Array edges, int calcMode)
+{
+  LogLikelihood *below = treeBuildBelow (t, gt, tree2vcf, edges) ;
+  LogLikelihood *above = treeBuildAbove (t, below, edges) ;
   // as currently coded this is a bit inefficient - I add the up-scores twice, once when
   // making below, and again when making above.  I could cache them with a bit more complexity.
+  LogLikelihood *scores = new0 (arrayMax(t->a), LogLikelihood) ;
+
+  // scores[0] is the LL at the root
+  scores[0].s0 = below[0].s0 ; scores[0].s1 = below[0].s1 ;
+  int i ;
+  switch (calcMode)
+    {
+    case -1: // LL switch on this edge
+      for (i = 1 ; i < arrayMax(t->a) ; ++i)
+	{ scores[i].s0 = above[i].s0 + below[i].s1 ;
+	  scores[i].s1 = above[i].s1 + below[i].s0 ;
+	}
+      break ;
+    case 0: // LL unchanged match
+      for (i = 1 ; i < arrayMax(t->a) ; ++i)
+	{ scores[i].s0 = above[i].s0 + below[i].s0 ;
+	  scores[i].s1 = above[i].s1 + below[i].s1 ;
+	}
+      break ;
+    case 1: // LL not unchanged mismatch - not written yet, so for now as case 0
+      for (i = 1 ; i < arrayMax(t->a) ; ++i)
+	{ scores[i].s0 = above[i].s0 + below[i].s0 ;
+	  scores[i].s1 = above[i].s1 + below[i].s1 ;
+	}
+      break ;
+    default: die ("unknown calc mode %d", calcMode) ;
+    }
+
+  free (below) ;
+  free (above) ;
   return scores ;
 }
 
 /***********************************************************************/
-
