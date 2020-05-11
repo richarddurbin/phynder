@@ -43,6 +43,7 @@ To obtain phynder:
 git clone https://github.com/samtools/htslib.git
 cd htslib
 make
+cd ..
 git clone https://github.com/richarddurbin/phynder.git
 cd phynder
 make
