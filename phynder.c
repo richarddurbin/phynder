@@ -5,7 +5,7 @@
  * Description: likelihood applications on trees for ancient Y data and more
  * Exported functions:
  * HISTORY:
- * Last edited: May 11 00:57 2020 (rd109)
+ * Last edited: May 11 01:43 2020 (rd109)
  * Created: Sun Nov 17 19:52:20 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -33,17 +33,17 @@ void usage (void)
   fprintf (stderr, "  -t <newick tree>\n") ;
   fprintf (stderr, "  -v <vcf for tree>        must follow -t\n") ;
   fprintf (stderr, "  -q <query vcf>           must follow -t and -v\n") ;
-  fprintf (stderr, "  -ts <transition rate>    [%.4f]\n", transitionRate) ;
-  fprintf (stderr, "  -tv <transversion rate>  [%.4f]\n", transversionRate) ;
+  fprintf (stderr, "  -p <posterior threshold> print out suboptimal branches and clade [%.0f]\n", posteriorThreshold) ;
   fprintf (stderr, "  -B <branch file name>    output branch positions of tree variants\n") ;
   fprintf (stderr, "  -T <thresh>              site likelihood threshold, zero means no threshold [%.1f]\n", siteThreshold) ;
-  fprintf (stderr, "  -U                       make tree ultrametric - all leaves equidistant from root\n") ;
-  fprintf (stderr, "  -h                       print this message\n") ;
-  fprintf (stderr, "  -V                       verbose - print extra info\n") ;
+  fprintf (stderr, "  -ts <transition rate>    [%.4f]\n", transitionRate) ;
+  fprintf (stderr, "  -tv <transversion rate>  [%.4f]\n", transversionRate) ;
   fprintf (stderr, "  -C <calc_mode>           [%d] calculation mode\n", calcMode) ;
   fprintf (stderr, "                           calc_mode 0: LL both ends of edge match\n") ;
   fprintf (stderr, "                           calc_mode 1: -LL both ends of edge mismatch\n") ;
-  fprintf (stderr, "  -p <posterior threshold> print out suboptimal alignments and clade [%.4f]\n", posteriorThreshold) ;
+  fprintf (stderr, "  -U                       make tree ultrametric - all leaves equidistant from root\n") ;
+  fprintf (stderr, "  -V                       verbose - print extra info\n") ;
+  fprintf (stderr, "  -h                       print this message\n") ;
   exit (0) ;
 }
 
