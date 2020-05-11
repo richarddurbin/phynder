@@ -5,7 +5,7 @@
  * Description: based on pbwtHtslib.c
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 19 10:56 2019 (rd109)
+ * Last edited: May 10 23:53 2020 (rd109)
  * Created: Sun Nov 17 19:41:19 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -69,7 +69,7 @@ Vcf *vcfRead (char *filename)  /* read GTs from vcf/bcf using htslib */
       s->gt[nSample] = 0 ;
     }
   printf ("read %d sites for %d samples from VCF file %s\n", arrayMax(v->sites), nSample, filename) ;
-  printf ("ignored %d multi-allelic sites, and %d non-SNP sites\n", nMultipleAllele, nNotSNP) ;
+  printf ("  ignored %d multi-allelic sites, and %d non-SNP sites\n", nMultipleAllele, nNotSNP) ;
 
   bcf_sr_destroy (sr) ;
   

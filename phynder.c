@@ -5,7 +5,7 @@
  * Description: likelihood applications on trees for ancient Y data and more
  * Exported functions:
  * HISTORY:
- * Last edited: May 10 18:36 2020 (rd109)
+ * Last edited: May 11 00:57 2020 (rd109)
  * Created: Sun Nov 17 19:52:20 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -22,8 +22,7 @@ static double siteThreshold = -10.0 ; // log likelihood threshold to accept a si
 static BOOL   isUltrametric = FALSE ;
 static BOOL   isVerbose = FALSE ;
 static int    calcMode = 0 ; // calculation mode
-static double cladePosterior = 0.99 ;
-static BOOL   isSubOptimal = FALSE ;
+static double posteriorThreshold = 0. ;
 
 static int baseMap[128] ;
 #define POS_HASH(s) (((s)->pos << 4) + (baseMap[(s)->ref] << 2) + baseMap[(s)->alt])
@@ -44,8 +43,7 @@ void usage (void)
   fprintf (stderr, "  -C <calc_mode>           [%d] calculation mode\n", calcMode) ;
   fprintf (stderr, "                           calc_mode 0: LL both ends of edge match\n") ;
   fprintf (stderr, "                           calc_mode 1: -LL both ends of edge mismatch\n") ;
-  fprintf (stderr, "  -p <posterior in clade>  posterior fraction required for clade assignment [%.4f]\n", cladePosterior) ;
-  fprintf (stderr, "  -s                       print suboptimal sites with posterior > 1-p\n") ;
+  fprintf (stderr, "  -p <posterior threshold> print out suboptimal alignments and clade [%.4f]\n", posteriorThreshold) ;
   exit (0) ;
 }
 
@@ -75,17 +73,17 @@ int main (int argc, char *argv[])
 	treeNodeDestroy (n) ;
 	printf ("read tree with %d nodes and %d leaves from %s\n",
 		arrayMax(t->a), (arrayMax(t->a)+1)/2, argv[1]) ;
-	timeUpdate (stdout) ;
+	if (isVerbose) timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-v"))
       { vt = vcfRead (argv[1]) ;
-	timeUpdate (stdout) ;
+	if (isVerbose) timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-q"))
       { vq = vcfRead (argv[1]) ;
-	timeUpdate (stdout) ;
+	if (isVerbose) timeUpdate (stdout) ;
 	argc -= 2 ; argv += 2 ;
       }
     else if (!strcmp (*argv, "-B") && argc > 1)
@@ -99,12 +97,10 @@ int main (int argc, char *argv[])
     else if (!strcmp (*argv, "-T") && argc > 1)
       { siteThreshold = atof (argv[1]) ; argc -= 2 ; argv += 2 ; }
     else if (!strcmp (*argv, "-p") && argc > 1)
-      { cladePosterior = atof (argv[1]) ; argc -= 2 ; argv += 2 ;
-	if (cladePosterior < 0. || cladePosterior >= 1.)
-	  die ("clade posterior %f must be between 0 and 1", cladePosterior) ;
+      { posteriorThreshold = atof (argv[1]) ; argc -= 2 ; argv += 2 ;
+	if (posteriorThreshold < 0. || posteriorThreshold >= 1.)
+	  die ("posterior %f must be between 0 and 1", posteriorThreshold) ;
       }
-    else if (!strcmp (*argv, "-s"))
-      { isSubOptimal = TRUE ; --argc ; ++argv ; }
     else if (!strcmp (*argv, "-V"))
       { isVerbose = TRUE ; --argc ; ++argv ; }
     else if (!strcmp (*argv, "-C"))
@@ -114,13 +110,14 @@ int main (int argc, char *argv[])
 
   if (!t) die ("must specify a tree with -t argument") ;
 
-  if (isUltrametric) { treeBalance (t) ; timeUpdate (stdout) ; }
+  if (isUltrametric) { treeBalance (t) ; if (isVerbose) timeUpdate (stdout) ; }
 
   double worstTransition, worstTransversion ;
   Array transitionEdges = treeBuildEdges (t, transitionRate, &worstTransition) ;
   Array transversionEdges = treeBuildEdges (t, transversionRate, &worstTransversion) ;
   if (isVerbose)
-    printf ("worst transition transversion %8.2f %8.2f\n", worstTransition, worstTransversion) ;
+    printf ("  worst transition transversion %8.2f %8.2f\n",
+	    worstTransition, worstTransversion) ;
 
   // build map from tree vcf to tree leaf nodes
   if (!vt) die ("must give a vcf for the tree") ;
@@ -141,7 +138,7 @@ int main (int argc, char *argv[])
       }
   free (leafFound) ;
   printf ("built index from tree to vcf\n") ;
-  timeUpdate (stdout) ;
+  if (isVerbose) timeUpdate (stdout) ;
   
   // build scores for each site for each node in tree
   // indirection via siteIndex so that info for sites with identical genotypes is shared
@@ -176,12 +173,14 @@ int main (int argc, char *argv[])
 	  default: ++nBad ;
 	  }
       if (nBad)
-	{ if (isVerbose) fprintf (stderr, "%d bad genotypes for site %d - drop site\n", nBad, i) ;
+	{ if (isVerbose)
+	    fprintf (stderr, "%d bad genotypes for site %d - drop site\n", nBad, i) ;
 	  ++nBadGT ;
 	  continue ;
 	}
       if (!n0 || !n1)
-	{ if (isVerbose) fprintf (stderr, "site %d is monomorphic gt0 %d gt1 %d\n", i, n0, n1) ;
+	{ if (isVerbose)
+	    fprintf (stderr, "site %d is monomorphic gt0 %d gt1 %d\n", i, n0, n1) ;
 	  ++nMonomorphic ;
 	  continue ;
 	}
@@ -226,7 +225,7 @@ int main (int argc, char *argv[])
       if ((j = arr(hMiss,i,int)))
 	printf ("    %d site patterns with %d genotypes missing\n", j, i) ;
   arrayDestroy (hMiss) ;
-  timeUpdate (stdout) ;
+  if (isVerbose) timeUpdate (stdout) ;
 
   logPrior = new0 (arrayMax(t->a), double) ;
   
@@ -247,15 +246,12 @@ int main (int argc, char *argv[])
 	}
       fclose (fB) ;
       printf ("written branch assignments for %d sites to file\n", nGood) ;
-      timeUpdate (stdout) ;
+      if (isVerbose) timeUpdate (stdout) ;
     }
   else if (vq)
     { if (strcmp (vq->seqName, vt->seqName))
 	die ("query seqName %s != reference %s", vq->seqName, vt->seqName) ;
 
-      printf ("query %d samples with data at %d sites,",
-	      dictMax(vq->samples), arrayMax(vq->sites)) ;
-      
       int *siteMap = new0 (arrayMax(vq->sites), int) ; // index of vq site in vt site list
       int nSitesMapped = 0 ;
       for (i = 0 ; i < arrayMax (vq->sites) ; ++i)
@@ -265,10 +261,13 @@ int main (int argc, char *argv[])
 	      ++nSitesMapped ;
 	    }
 	  else if (isVerbose)
-	    fprintf (stderr, "can't find site in tree: %d %c %c\n",s->pos, s->ref, s->alt) ;
+	    fprintf (stderr, "  can't find site in tree: %d %c %c\n",s->pos, s->ref, s->alt) ;
 	}
-      printf (" matching %d sites in the tree\n", nSitesMapped) ;
       if (!nSitesMapped) die ("no shared sites with which to map query samples") ;
+
+  //      printf ("file contains %d samples with data at %d sites,", 
+  //	      dictMax(vq->samples), arrayMax(vq->sites)) ;
+  //      printf (" matching %d sites in the tree\n", nSitesMapped) ;
 
       double *qScore = new (arrayMax(t->a), double) ;
       double *qCladeTotal = new (arrayMax(t->a), double) ;
@@ -294,7 +293,7 @@ int main (int argc, char *argv[])
 		  }
 	      }
 	  if (!n)
-	    { printf ("  %s no data to map\n", dictName(vq->samples,j)) ;
+	    { printf ("query %s no data to map\n", dictName(vq->samples,j)) ;
 	      continue ;
 	    }
 	  double best = 0. ; int kBest ;
@@ -303,12 +302,18 @@ int main (int argc, char *argv[])
 	  double total = 0. ;
 	  for (k = 1 ; k < arrayMax(t->a) ; ++k)
 	    if (qScore[k] > best-15.) total += exp(qScore[k] - best) ;
-	  printf ("  %s n %d branch %d posterior %.2f score %.2f per-site %.2f\n",
-		  dictName(vq->samples,j), n, kBest, 1./total,
+	  printf ("query %s bestbranch %d posterior %.2f nsites %d score %.2f per-site %.2f\n",
+		  dictName(vq->samples,j), kBest, 1./total, n,
 		  best - baseScore, (best - baseScore)/n) ;
 
-	  if (cladePosterior)
-	    { double cladeThresh = total * cladePosterior ;
+	  if (posteriorThreshold)
+	    { double diff = log(posteriorThreshold) ;
+	      for (k = 1 ; k < arrayMax(t->a) ; ++k)
+		if (k != kBest && qScore[k] > best+diff)
+		  printf ("query %s suboptimal %d posterior %.2f\n",
+			   dictName(vq->samples,j), k, exp(qScore[k] - best) / total) ;
+
+	      double cladeThresh = total * (1-posteriorThreshold) ;
 	      for (k = arrayMax(t->a) ; k-- ; ) // need reverse order for post-order
 		{ TreeElement *e = arrp(t->a, k, TreeElement) ;
 		  if (e->left)
@@ -319,22 +324,14 @@ int main (int argc, char *argv[])
 		    qCladeTotal[k] += exp(qScore[k] - best) ;
 		  if (qCladeTotal[k] > cladeThresh) break ;
 		}
-	      printf ("   %s n %d clade %d\n", dictName(vq->samples,j), n, k) ;
-	    }
-	  
-	  if (isSubOptimal)
-	    { double diff = log(1.-cladePosterior) ;
-	      for (k = 1 ; k < arrayMax(t->a) ; ++k)
-		if (k != kBest && qScore[k] > best+diff)
-		  printf ("   %s n %d subop %d posterior %.2f\n",
-			   dictName(vq->samples,j), n, k, exp(qScore[k] - best) / total) ;
+	      printf ("query %s clade %d\n", dictName(vq->samples,j), k) ;
 	    }
 	}
       vcfDestroy (vq) ;
       free (qScore) ;
       free (qCladeTotal) ;
       
-      timeUpdate (stdout) ;
+      if (isVerbose) timeUpdate (stdout) ;
     }
 
   treeDestroy (t) ;
@@ -342,7 +339,7 @@ int main (int argc, char *argv[])
   dictDestroy (gtDict) ;
   hashDestroy (posHash) ;
 
-  timeTotal (stdout) ;
+  if (isVerbose) timeTotal (stdout) ;
   
   return 0 ;
 }
