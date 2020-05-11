@@ -2,7 +2,7 @@
 
 Efficient likelihood calculations to place samples into a phylogenetic tree.  In particular, phynder was originally designed for placing male ancient DNA samples into the Y chromosome phylogeny, when there are arbitrarily high rates of missing data.  It has also been used for assigning ancient samples to whole mitochondrial genome phylogenies.
 
-###Synopsis
+### Synopsis
 
 ```
 phynder -t tree.nwk -v tree.vcf.qz -p 0.01 -q query.vcf
