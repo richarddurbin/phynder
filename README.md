@@ -38,6 +38,7 @@ Here the file `branches.out` will be created, listing for each of the variant si
 
 Phynder requires htslib, the library that reads and writes SAM/BAM/CRAM and VCF/BCF files.
 To obtain phynder:
+
 ```
 git clone https://github.com/samtools/htslib.git
 cd htslib
@@ -46,7 +47,8 @@ git clone https://github.com/richarddurbin/phynder.git
 cd phynder
 make
 make install
-``
+```
+
 NB `make install` copies the binary into your ~/bin directory.  If you want to install it elsewhere, either
 copy the executable there yourself or change the makefile to copy to where you want.
 
