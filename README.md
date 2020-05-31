@@ -5,34 +5,70 @@ Efficient likelihood calculations to place samples into a phylogenetic tree.  In
 ### Synopsis
 
 ```
-phynder -t tree.nwk -v tree.vcf.qz -p 0.01 -q query.vcf
+phynder -q query.vcf -p 0.01 -o query.phy tree.nwk tree.vcf.qz
 ```
-where query.vcf contains one sample called `test`, giving the following output
+where query.vcf contains one sample called **test**. This gives the
+following output in query.phy
 
 ```
-read tree with 4027 nodes and 2014 leaves from tree.nwk
-read 121335 sites for 2014 samples from VCF file trees.vcf.gz
-  ignored 631 multi-allelic sites, and 0 non-SNP sites
-read 7221 sites for 1 samples from VCF file test.vcf.gz
-  ignored 0 multi-allelic sites, and 0 non-SNP sites
-built index from tree to vcf
-built scores for 121323 gt patterns
-using 120908 good sites
-  427 sites rejected because likelihood below threshold -10.0
-  121335 sites had missing genotypes, mean 31.5
-query test bestbranch 424 posterior 0.48 nsites 7154 score -54.00 per-site -0.01
-query test suboptimal 413 posterior 0.02
-query test suboptimal 414 posterior 0.03
-query test suboptimal 419 posterior 0.01
-query test suboptimal 423 posterior 0.45
-query test clade 409
+1 3 smp 1 1
+! 4 7 phynder 3 1.0 62 phynder -q query.vcf -p 0.01 -o query.phy tree.nwk tree.vcf.gz 19 2020-05-14_13:21:02
+.
+~ D I 1 6 STRING                sample name
+~ D B 3 3 INT 4 REAL 4 REAL     best branch, posterior, score
+~ D C 1 3 INT                   clade
+~ D N 1 3 INT                   number of sites used to assign branch
+~ D S 3 3 INT 4 REAL 4 REAL     suboptimal branch, posterior, score
+.
+. read tree with 4027 nodes and 2014 leaves
+. read 121335 sites for 2014 samples in tree
+.   ignored 631 multiple-allelele and 0 non-SNP sites
+. built scores for 121323 gt patterns
+. using 120908 good sites
+.   427 sites rejected because likelihood below threshold -10.0
+.   121335 sites had missing genotypes, mean 31.5
+. read 7221 sites for 1 samples in query
+. 
+I 4 test
+N 7154
+B 424 0.478123 -54.000068
+S 413 0.020019 -57.173241
+S 414 0.034168 -56.638637
+S 419 0.007578 -58.144716
+S 423 0.449961 -54.060776
+C 409
 ```
-In this example, although branches 424 is best, branch 423 has nearly equal posterior probability, and their parent branch 409 is the most specific branch in the tree that contains at least 99% of the total posterior probability.
+This is a ONEcode file, which is a general data self-documenting data
+exchange format in which each file is composed of a header made of lines
+starting with symbols that are not letters, followed by a body
+containing data made of lines starting with letters.  See the [vgp-tools website](https://github.com/VGP/vgp-tools) for
+further details on the general ONEcode format and associated tools.
+
+The first line of the header
+identifies this as ONEcode, defines the file type (smp for "sample")
+and format version.  The next line provides the provenance of the
+file. The next block gives the schema, defining each line type that
+will be used in the body of the file.  Then come a set of comment
+lines that in this case describe some key facts of the data
+processing.
+
+The body is composed of lines that start with alphabetic characters,
+following the schema. In our case I lines give the sample identifiers
+and define the objects,
+B lines give the best branch assignment with its posterior probability and
+likelihood score, and S lines give suboptimal branch assignments with their
+posteriors and scores.  The output lists suboptimal assignments with
+posterior probability higher than the *p* parameter given on the
+command line, in this case 0.01. The C line indicates the the most
+specific branch in the tree that contains at least (1-*p*) of the total
+posterior probability.
 
 ```
-phynder -t tree.nwk -v tree.vcf.gz -B branches.out
+phynder  -B -o branches.snp tree.nwk tree.vcf.gz
 ```
-Here the file `branches.out` will be created, listing for each of the variant sites in `tree.vcf.gz` the most likely branch in `tree.nwk` on which the relevant mutation occurred (plus some other information described below).
+Here the file `branches.snp` will be created, listing for each of the
+variant sites in `tree.vcf.gz` the most likely branch in `tree.nwk` on
+which the relevant mutation occurred, plus some other information described below.
 
 ### Installation
 
@@ -56,24 +92,36 @@ copy the executable there yourself or change the makefile to copy to where you w
 ### Commands and options
 
 To see the command line options run `phynder` without arguments.  You should get a help message with
-the available options/commands.  
+the available options/commands.
 
-Further information on options is given below.
+The general form of a phynder command line is a series of options, followed by two required file names. 
 
 ```
-  -t <newick tree>
-  -v <vcf for tree>
+  phynder [options] <newick tree> <vcf for tree>
 ```
-These two options are always required, in this order (`-t` then `-v`).
+Further information on options is given below.  They can come in any
+order, because they are all parsed before any computation is carried out.
 
-The tree must be in standard Newick format, and should have
-branch lengths corresponding to times, ideally built with a maximum likelihood method using the
-data in the VCF file. It can either be *rooted* with two branches deriving from the top level node, or *unrooted* with three branches
-deriving from the top level node.
+The tree must be in standard Newick format, and should have branch
+lengths corresponding to times, ideally built with a maximum
+likelihood method using the data in the VCF file. It can either be
+*rooted* with two branches deriving from the top level node, or
+*unrooted* with three branches deriving from the top level node.
 
-The sites that will be used in the analysis Genotypes are given in a VCF file, which can in practice be an uncompressed or gzip compressed .vcf
-file, or a binary .bcf file as made for example with bcftools.  Only biallelic single nucleotide
-variants are used.  The user does not need to assign the ancestral state for variants.
+The sites that will be used in the analysis must have genotypes given
+for the samples leaves in the tree in a VCF file, which can in
+practice be an uncompressed or gzip compressed .vcf file, or a binary
+.bcf file as made for example with bcftools.  Only biallelic single
+nucleotide variants are used.  The user does not need to assign the
+ancestral state for variants.  Analysis will be faster if there is no
+missing data, but some level of missingness is tolerated.  High
+missingness will increase compute time and degrade performance.
+
+```
+  -o <filename>            output filename - this will be a ONEcode file
+  -b                       output in binary
+```
+
 
 ```
   -ts <transition rate>    [1.3300]
@@ -93,7 +141,7 @@ shortest branch, since we need to allow for a single mutation on any branch.
 Setting `T 0` will disable the theshold, using all sites.  This may in particular be of interest in conjunction with `-B` so as to collect information on all sites.  Otherwise the default value is in most cases sensible.
 
 ```
-  -q <query vcf>           must follow -t and -v
+  -q <query vcf>           a vcf file of samples that the user wants to place into the tree
   -C <calc_mode>           [0] calculation mode
                            calc_mode 0: LL both ends of edge match
 ```

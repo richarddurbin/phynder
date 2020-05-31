@@ -36,9 +36,11 @@ newick.o: newick.h
 
 vcf.o: vcf.h
 
+ONElib.o: ONElib.h
+
 ### programs
 
-phynder: phynder.c tree.o newick.o vcf.o $(UTILS_OBJS)
+phynder: phynder.c tree.o newick.o vcf.o ONElib.o $(UTILS_OBJS)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 newick-test: newick.c tree.o $(UTILS_OBJS)

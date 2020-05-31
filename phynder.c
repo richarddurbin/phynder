@@ -5,7 +5,7 @@
  * Description: likelihood applications on trees for ancient Y data and more
  * Exported functions:
  * HISTORY:
- * Last edited: May 11 01:43 2020 (rd109)
+ * Last edited: May 16 19:07 2020 (rd109)
  * Created: Sun Nov 17 19:52:20 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -13,8 +13,31 @@
 #include "tree.h"
 #include "newick.h"
 #include "vcf.h"
+#include "ONElib.h"
 #include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
+
+char *schemaText =
+  "1 3 def 1 0  schema for phynder\n"
+  ".\n"
+  "P 3 var                    variant file\n"
+  "S 3 snp                    SNP file\n"
+  "D c 2 3 INT 6 STRING          chromosome\n"
+  "D V 2 3 INT 11 STRING_LIST    pos, ref string, alt string\n"
+  "D A 1 4 CHAR                  0 for ref ancestral, 1 for alt ancestral\n"
+  "D L 1 4 REAL                  log likelihood of the site\n"
+  "D B 2 3 INT 4 REAL            best branch assignment, score\n"
+  "D S 2 3 INT 4 REAL            secondary branch assignment, score\n"
+  ".\n"
+  "P 3 smp                    sample file\n"
+  "D I 1 6 STRING                sample name\n"
+  "D N 1 3 INT                   number of sites\n"
+  "D B 3 3 INT 4 REAL 4 REAL     best branch, posterior, score\n"
+  "D S 3 3 INT 4 REAL 4 REAL     suboptimal branch, posterior, score\n"
+  "D C 1 3 INT                   clade\n"
+  ".\n"
+  "P 3 nul                    empty file - comments only\n" ;
 
 static double transitionRate = 1.33 ; // expect ratio 4:1 for ts:tv rates
 static double transversionRate = 0.33 ; // these values give mean 1.0 for 2:1 ts:tv events
@@ -27,14 +50,14 @@ static double posteriorThreshold = 0. ;
 static int baseMap[128] ;
 #define POS_HASH(s) (((s)->pos << 4) + (baseMap[(s)->ref] << 2) + baseMap[(s)->alt])
 
-void usage (void)
+static void usage (void)
 {
-  fprintf (stderr, "usage: phynder [arguments/options]\n") ;
-  fprintf (stderr, "  -t <newick tree>\n") ;
-  fprintf (stderr, "  -v <vcf for tree>        must follow -t\n") ;
-  fprintf (stderr, "  -q <query vcf>           must follow -t and -v\n") ;
+  fprintf (stderr, "usage: phynder [options] <newick tree> <vcf for tree>\n") ;
+  fprintf (stderr, "  -o <output filename>     ONEfile name; default is stdout [-]\n") ;
+  fprintf (stderr, "  -b                       write binary (can read with ONEview)\n") ;
+  fprintf (stderr, "  -q <query vcf>           output query assignments\n") ;
   fprintf (stderr, "  -p <posterior threshold> print out suboptimal branches and clade [%.0f]\n", posteriorThreshold) ;
-  fprintf (stderr, "  -B <branch file name>    output branch positions of tree variants\n") ;
+  fprintf (stderr, "  -B                       output branch positions of tree variants\n") ;
   fprintf (stderr, "  -T <thresh>              site likelihood threshold, zero means no threshold [%.1f]\n", siteThreshold) ;
   fprintf (stderr, "  -ts <transition rate>    [%.4f]\n", transitionRate) ;
   fprintf (stderr, "  -tv <transversion rate>  [%.4f]\n", transversionRate) ;
@@ -42,18 +65,39 @@ void usage (void)
   fprintf (stderr, "                           calc_mode 0: LL both ends of edge match\n") ;
   fprintf (stderr, "                           calc_mode 1: -LL both ends of edge mismatch\n") ;
   fprintf (stderr, "  -U                       make tree ultrametric - all leaves equidistant from root\n") ;
-  fprintf (stderr, "  -V                       verbose - print extra info\n") ;
+  fprintf (stderr, "  -v                       verbose - print extra info\n") ;
   fprintf (stderr, "  -h                       print this message\n") ;
   exit (0) ;
 }
 
+static char *commandLine (int argc, char **argv)
+{
+  int i, totLen = 0 ;
+  for (i = 0 ; i < argc ; ++i) totLen += 1 + strlen(argv[i]) ;
+  char *buf = new (totLen, char) ;
+  strcpy (buf, argv[0]) ;
+  for (i = 1 ; i < argc ; ++i) { strcat (buf, " ") ; strcat (buf, argv[i]) ; }
+  return buf ;
+}
+
+void onePrintf (OneFile *vf, char *format, ...)
+{
+  static char buf[1024] ;
+  va_list args ;
+
+  oneWriteLine (vf, '.', 0, 0) ;
+
+  va_start (args, format) ;
+  vsprintf (buf, format, args) ;
+  va_end (args) ;
+
+  oneWriteComment (vf, buf) ;
+}
+
 int main (int argc, char *argv[])
 {
-  FILE *f ;
-  Tree *t = 0 ;
-  Vcf *vt = 0, *vq = 0 ;
-  FILE *fB = 0 ;
-  double *logPrior = 0 ;
+  char      *queryFile = 0, *outFile = "-" ;
+  bool       isBranchOut = false, isBinary = false ;
  
   timeUpdate (0) ;
 
@@ -62,34 +106,17 @@ int main (int argc, char *argv[])
   baseMap['g'] = baseMap['G'] = 2 ;
   baseMap['t'] = baseMap['T'] = 3 ;
 
+  char *command = commandLine (argc, argv) ;
   --argc ; ++argv ; // absorb executable name
-  if (!argc || !strcmp (*argv, "-h")) usage () ;
   while (argc)
-    if (!strcmp (*argv, "-t") && argc > 1)
-      { if (!(f = fopen (argv[1], "r"))) die ("failed to open newick tree file %s", argv[1]) ;
-	TreeNode *n = readBinaryNewickTree (f) ;
-	fclose (f) ;
-	t = treeCreate (n) ;
-	treeNodeDestroy (n) ;
-	printf ("read tree with %d nodes and %d leaves from %s\n",
-		arrayMax(t->a), (arrayMax(t->a)+1)/2, argv[1]) ;
-	if (isVerbose) timeUpdate (stdout) ;
-	argc -= 2 ; argv += 2 ;
-      }
-    else if (!strcmp (*argv, "-v"))
-      { vt = vcfRead (argv[1]) ;
-	if (isVerbose) timeUpdate (stdout) ;
-	argc -= 2 ; argv += 2 ;
-      }
-    else if (!strcmp (*argv, "-q"))
-      { vq = vcfRead (argv[1]) ;
-	if (isVerbose) timeUpdate (stdout) ;
-	argc -= 2 ; argv += 2 ;
-      }
-    else if (!strcmp (*argv, "-B") && argc > 1)
-      { if (!(fB = fopen (argv[1], "w"))) die ("failed to write branch file %s", argv[1]) ;
-	argc -= 2 ; argv += 2 ;
-      }
+    if (!strcmp (*argv, "-o") && argc > 1)
+      { outFile = argv[1] ; argc -= 2 ; argv += 2 ; }
+    else if (!strcmp (*argv, "-b"))
+      { isBinary = true ; --argc ; ++argv ; }
+    else if (!strcmp (*argv, "-q") && argc > 1)
+      { queryFile = argv[1] ; argc -= 2 ; argv += 2 ; }
+    else if (!strcmp (*argv, "-B"))
+      { isBranchOut = true ; --argc ; ++argv ; }
     else if (!strcmp (*argv, "-ts") && argc > 1)
       { transitionRate = atof (argv[1]) ; argc -= 2 ; argv += 2 ; }
     else if (!strcmp (*argv, "-tv") && argc > 1)
@@ -101,23 +128,62 @@ int main (int argc, char *argv[])
 	if (posteriorThreshold < 0. || posteriorThreshold >= 1.)
 	  die ("posterior %f must be between 0 and 1", posteriorThreshold) ;
       }
-    else if (!strcmp (*argv, "-V"))
+    else if (!strcmp (*argv, "-v"))
       { isVerbose = TRUE ; --argc ; ++argv ; }
-    else if (!strcmp (*argv, "-C"))
+    else if (!strcmp (*argv, "-C") && argc > 1)
       { calcMode = atoi (argv[1]) ; argc -= 2 ; argv += 2 ; }
+    else if (!strcmp (*argv, "-h"))
+      usage () ;
+    else if (argc != 2)
+      die ("command line error at %s - run without arguments for usage", *argv) ;
     else
-      die ("unrecognized command/option %s run with no arguments for usage", *argv) ;
+      break ;
 
-  if (!t) die ("must specify a tree with -t argument") ;
+  if (!argc) usage () ;
+  
+  OneSchema *vs = oneSchemaCreateFromText (schemaText) ;
+  OneFile *vf ; 
+  if (isBranchOut) vf = oneFileOpenWriteNew (outFile, vs, "snp", isBinary, 1) ;
+  else if (queryFile) vf = oneFileOpenWriteNew (outFile, vs, "smp", isBinary, 1) ;
+  else  vf = oneFileOpenWriteNew (outFile, vs, "nul", isBinary, 1) ;
+  oneSchemaDestroy (vs) ;
+  if (!vf) die ("failed to open output file %s", outFile) ;
+  oneAddProvenance (vf, "phynder", "1.0", command, 0) ;
+  oneWriteHeader (vf) ;
 
-  if (isUltrametric) { treeBalance (t) ; if (isVerbose) timeUpdate (stdout) ; }
+  FILE *f ;
+  if (!(f = fopen (argv[0], "r"))) die ("failed to open newick tree file %s", argv[0]) ;
+  TreeNode *n = readBinaryNewickTree (f) ;
+  fclose (f) ;
+  Tree *t = treeCreate (n) ;
+  treeNodeDestroy (n) ;
+  onePrintf (vf, "read tree with %d nodes and %d leaves",
+	       arrayMax(t->a), (arrayMax(t->a)+1)/2) ;
+  fprintf (stderr, "read tree with %d nodes: ", arrayMax(t->a)) ;
+  timeUpdate (stderr) ;
+
+  int multi = 0, nonSNP = 0 ;
+  Vcf *vt = vcfRead (argv[1], &multi, &nonSNP) ;
+  onePrintf (vf, "read %d sites for %d samples in tree",
+	     arrayMax(vt->sites), dictMax(vt->samples)) ;
+  if (multi || nonSNP)
+    onePrintf (vf, "  ignored %d multiple-allelele and %d non-SNP sites",
+	       multi, nonSNP) ;
+  fprintf (stderr, "read vcf for tree at %d sites: ", arrayMax(vt->sites)) ;
+  timeUpdate (stderr) ;
+
+  if (isUltrametric)
+    { treeBalance (t) ;
+      fprintf (stderr, "balanced tree: ") ;
+      timeUpdate (stderr) ;
+    }
 
   double worstTransition, worstTransversion ;
   Array transitionEdges = treeBuildEdges (t, transitionRate, &worstTransition) ;
   Array transversionEdges = treeBuildEdges (t, transversionRate, &worstTransversion) ;
   if (isVerbose)
-    printf ("  worst transition transversion %8.2f %8.2f\n",
-	    worstTransition, worstTransversion) ;
+    onePrintf (vf, "  worst transition transversion %8.2f %8.2f",
+		 worstTransition, worstTransversion) ;
 
   // build map from tree vcf to tree leaf nodes
   if (!vt) die ("must give a vcf for the tree") ;
@@ -137,13 +203,11 @@ int main (int argc, char *argv[])
 	else die ("problem connecting tree leaf %s i %d to vcf sample j %d", name, i, j) ;
       }
   free (leafFound) ;
-  printf ("built index from tree to vcf\n") ;
-  if (isVerbose) timeUpdate (stdout) ;
   
   // build scores for each site for each node in tree
   // indirection via siteIndex so that info for sites with identical genotypes is shared
   // NB if -B to output branches then can't also fit queries
-  if (fB) calcMode = -1 ;
+  if (isBranchOut) calcMode = -1 ;
   LogLikelihood **scores = new0(arrayMax(vt->sites), LogLikelihood*) ; // more than needed but cheap
   int *siteIndex = new0(arrayMax(vt->sites), int) ;
   DICT *gtDict = dictCreate (4*arrayMax(vt->sites)) ;
@@ -212,25 +276,32 @@ int main (int argc, char *argv[])
       siteIndex[i] = k ;  // only set the siteIndex for good sites, else 0 indicating bad
       ++nGood ;
     }
-  printf ("built scores for %d gt patterns\n", dictMax(gtDict)) ;
-  printf ("using %d good sites\n", nGood) ;
-  if (nMonomorphic) printf ("  %d sites rejected because monomorphic\n", nMonomorphic) ;
-  if (nBadGT) printf ("  %d sites rejected because they had bad genotpes\n", nBadGT) ;
-  if (nThresh) printf ("  %d sites rejected because likelihood below threshold %.1f\n",
-		       nThresh, siteThreshold) ;
-  if (nWithMiss) printf ("  %d sites had missing genotypes, mean %.1f\n",
-			 nWithMiss, totMiss / (double) nWithMiss) ;
+  onePrintf (vf, "built scores for %d gt patterns", dictMax(gtDict)) ;
+  onePrintf (vf, "using %d good sites", nGood) ;
+  if (nMonomorphic) onePrintf (vf, "  %d sites rejected because monomorphic", nMonomorphic) ;
+  if (nBadGT) onePrintf (vf, "  %d sites rejected because they had bad genotpes", nBadGT) ;
+  if (nThresh) onePrintf (vf, "  %d sites rejected because likelihood below threshold %.1f",
+			  nThresh, siteThreshold) ;
+  if (nWithMiss) onePrintf (vf, "  %d sites had missing genotypes, mean %.1f",
+			    nWithMiss, totMiss / (double) nWithMiss) ;
   if (isVerbose)
     for (i = 0 ; i < arrayMax (hMiss) ; ++i)
       if ((j = arr(hMiss,i,int)))
-	printf ("    %d site patterns with %d genotypes missing\n", j, i) ;
+	fprintf (stderr, "  %d site patterns with %d genotypes missing\n", j, i) ;
   arrayDestroy (hMiss) ;
-  if (isVerbose) timeUpdate (stdout) ;
+  fprintf (stderr, "built score table: ") ;
+  timeUpdate (stderr) ;
 
-  logPrior = new0 (arrayMax(t->a), double) ;
-  
-  if (fB)
-    { for (i = 0 ; i < arrayMax(vt->sites) ; ++i)
+  double *logPrior = new0 (arrayMax(t->a), double) ;
+
+  // code for finding the most likely branch(es) for mutations per site
+  if (isBranchOut)
+    { onePrintf (vf, "") ; // end of header reports
+      oneInt(vf,0) = arrayMax(vt->sites) ;
+      oneWriteLine (vf, 'c', strlen(vt->seqName), vt->seqName) ;
+
+      char *buf = new0 (4, char) ;
+      for (i = 0 ; i < arrayMax(vt->sites) ; ++i)
 	{ if (!siteIndex[i]) continue ;
 	  VcfSite *s = arrp(vt->sites, i, VcfSite) ;
 	  double best = 0., best2 = 0. ; int kBest, kBest2 ;
@@ -240,16 +311,29 @@ int main (int argc, char *argv[])
 	      if (!best || x > best) { best2 = best ; kBest2 = kBest ; best = x ; kBest = k ; }
 	      else if (!best2 || x > best2) { best2 = x ; kBest2 = k ; }
 	    }
-	  fprintf (fB, "%s\t%d\t%c\t%c\t%d\t%d\t%8.2f\t%d\t%8.2f\t%8.2f\n",
-		   vt->seqName, s->pos, s->ref, s->alt, isAnc1[i],
-		   kBest, best, kBest2, best2-best, llSite[siteIndex[i]]) ;
+	  oneInt(vf,0)=s->pos ; buf[0]=s->ref ; buf[2]=s->alt ; oneWriteLine (vf, 'V', 2, buf) ;
+	  oneChar(vf,0) = isAnc1[i] ? '1' : '0' ; oneWriteLine (vf, 'A', 0, 0) ;
+	  oneReal(vf,0) = llSite[siteIndex[i]] ; oneWriteLine (vf, 'L', 0, 0) ;
+	  oneInt(vf,0) = kBest ; oneReal(vf,1) = best ; oneWriteLine (vf, 'B', 0, 0) ;
+	  oneInt(vf,0) = kBest2 ; oneReal(vf,1) = best2 ; oneWriteLine (vf, 'S', 0, 0) ;
 	}
-      fclose (fB) ;
-      printf ("written branch assignments for %d sites to file\n", nGood) ;
-      if (isVerbose) timeUpdate (stdout) ;
+
+      fprintf (stderr, "assigned %d branches: ", arrayMax(vt->sites)) ;
+      timeUpdate (stderr) ;
     }
-  else if (vq)
-    { if (strcmp (vq->seqName, vt->seqName))
+  
+  // code for finding the most likely branch(es) for new samples
+  else if (queryFile)
+    { Vcf *vq = vcfRead (queryFile, &multi, &nonSNP) ;
+      onePrintf (vf, "read %d sites for %d samples in query",
+		 arrayMax(vq->sites), dictMax(vq->samples)) ;
+      if (multi || nonSNP)
+	onePrintf (vf, "  ignored %d multiple-allelele and %d non-SNP sites",
+		   multi, nonSNP) ;
+      fflush (vf->f) ;
+      onePrintf (vf, "") ; // end of header reports
+  
+      if (strcmp (vq->seqName, vt->seqName))
 	die ("query seqName %s != reference %s", vq->seqName, vt->seqName) ;
 
       int *siteMap = new0 (arrayMax(vq->sites), int) ; // index of vq site in vt site list
@@ -271,16 +355,17 @@ int main (int argc, char *argv[])
 
       double *qScore = new (arrayMax(t->a), double) ;
       double *qCladeTotal = new (arrayMax(t->a), double) ;
+      int nMapped = 0 ;
       for (j = 0 ; j < dictMax (vq->samples) ; ++j)
 	{ memcpy (qScore, logPrior, arrayMax(t->a)*sizeof(double)) ;
 	  double baseScore = 0. ;
-	  int n = 0 ;
+	  int nSite = 0 ;
 	  for (i = 0 ; i < arrayMax (vq->sites) ; ++i)
 	    if (siteMap[i])
 	      { LogLikelihood *score = scores[siteMap[i]] ;
 		VcfSite *sq = arrp (vq->sites, i, VcfSite) ;
 		if (sq->gt[j] > 1)
-		  { ++n ;
+		  { ++nSite ;
 		    // around 191231 started writing the line below
 		    // treeQueryAddSite (qScore, sq->gt[j]-2, scores[siteMap[i]],
 		    if (sq->gt[j] == 2) // ref
@@ -292,27 +377,30 @@ int main (int argc, char *argv[])
 		    baseScore += llSite[siteMap[i]] ;
 		  }
 	      }
-	  if (!n)
-	    { printf ("query %s no data to map\n", dictName(vq->samples,j)) ;
+	  if (!nSite)
+	    { fprintf (stderr, "query %s no data to map\n", dictName(vq->samples,j)) ;
 	      continue ;
 	    }
+	  ++nMapped ;
 	  double best = 0. ; int kBest ;
 	  for (k = 1 ; k < arrayMax(t->a) ; ++k)
 	    if (!best || qScore[k] > best) { best = qScore[k] ; kBest = k ; }
 	  double total = 0. ;
 	  for (k = 1 ; k < arrayMax(t->a) ; ++k)
 	    if (qScore[k] > best-15.) total += exp(qScore[k] - best) ;
-	  printf ("query %s bestbranch %d posterior %.2f nsites %d score %.2f per-site %.2f\n",
-		  dictName(vq->samples,j), kBest, 1./total, n,
-		  best - baseScore, (best - baseScore)/n) ;
 
+	  oneWriteLine (vf, 'I', strlen(dictName(vq->samples, j)), dictName(vq->samples, j)) ;
+	  oneInt(vf,0) = nSite ; oneWriteLine (vf, 'N', 0, 0) ;
+	  oneInt(vf,0) = kBest ; oneReal(vf,1) = 1./total ;
+	    oneReal(vf,2) = best - baseScore ; oneWriteLine (vf, 'B', 0, 0) ;
+	  
 	  if (posteriorThreshold)
 	    { double diff = log(posteriorThreshold) ;
 	      for (k = 1 ; k < arrayMax(t->a) ; ++k)
 		if (k != kBest && qScore[k] > best+diff)
-		  printf ("query %s suboptimal %d posterior %.2f\n",
-			   dictName(vq->samples,j), k, exp(qScore[k] - best) / total) ;
-
+		  { oneInt(vf,0) = k ; oneReal(vf,1) = exp(qScore[k] - best) / total ;
+		      oneReal(vf,2) = qScore[k] - baseScore ; oneWriteLine (vf, 'S', 0, 0) ;
+		  }
 	      double cladeThresh = total * (1-posteriorThreshold) ;
 	      for (k = arrayMax(t->a) ; k-- ; ) // need reverse order for post-order
 		{ TreeElement *e = arrp(t->a, k, TreeElement) ;
@@ -324,22 +412,26 @@ int main (int argc, char *argv[])
 		    qCladeTotal[k] += exp(qScore[k] - best) ;
 		  if (qCladeTotal[k] > cladeThresh) break ;
 		}
-	      printf ("query %s clade %d\n", dictName(vq->samples,j), k) ;
+	      oneInt(vf,0) = k ; oneWriteLine (vf, 'C', 0, 0) ;
 	    }
 	}
       vcfDestroy (vq) ;
       free (qScore) ;
       free (qCladeTotal) ;
-      
-      if (isVerbose) timeUpdate (stdout) ;
+
+      fprintf (stderr, "mapped %d samples: ", nMapped) ;
+      timeUpdate (stderr) ;
     }
 
+  oneFileClose (vf) ;
+  
   treeDestroy (t) ;
   vcfDestroy (vt) ;
   dictDestroy (gtDict) ;
   hashDestroy (posHash) ;
 
-  if (isVerbose) timeTotal (stdout) ;
+  fprintf (stderr, "total resource usage: ") ;
+  timeTotal (stderr) ;
   
   return 0 ;
 }

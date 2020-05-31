@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 19 18:28 2019 (rd109)
+ * Last edited: May 14 03:43 2020 (rd109)
  * Created: Sun Nov 17 23:25:45 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -24,7 +24,7 @@ typedef struct {
   char *seqName ;
 } Vcf ;
 
-Vcf *vcfRead (char *filename) ;
+Vcf *vcfRead (char *filename, int *multi, int *nonSNP) ;
 void vcfDestroy (Vcf *v) ;
 
 /****************************************/

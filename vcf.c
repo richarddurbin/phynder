@@ -5,7 +5,7 @@
  * Description: based on pbwtHtslib.c
  * Exported functions:
  * HISTORY:
- * Last edited: May 10 23:53 2020 (rd109)
+ * Last edited: May 14 03:45 2020 (rd109)
  * Created: Sun Nov 17 19:41:19 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -15,7 +15,7 @@
 #include <htslib/faidx.h>
 #include <ctype.h>		/* for toupper() */
 
-Vcf *vcfRead (char *filename)  /* read GTs from vcf/bcf using htslib */
+Vcf *vcfRead (char *filename, int *multi, int *nonSNP)  /* read GTs from vcf/bcf using htslib */
 {
   int i, j, k ;
 
@@ -36,7 +36,7 @@ Vcf *vcfRead (char *filename)  /* read GTs from vcf/bcf using htslib */
   assert (nSample == dictMax(v->samples)) ;
 
   int ngt_arr = 0, *gt_arr = NULL ;
-  int nMultipleAllele = 0, nNotSNP = 0 ;
+  *multi = 0, *nonSNP = 0 ;
   while (bcf_sr_next_line (sr)) 
     { bcf1_t *line = bcf_sr_get_line(sr,0) ;
       if (!v->seqName)
@@ -44,8 +44,8 @@ Vcf *vcfRead (char *filename)  /* read GTs from vcf/bcf using htslib */
       else if (strcmp (v->seqName, bcf_seqname(hr,line)))
 	die ("multiple sequence names in VCF file %s != %s", v->seqName, bcf_seqname(hr,line)) ;
       if (line->n_allele == 1) continue ; // ignore lines with no alts
-      if (line->n_allele > 2) { ++nMultipleAllele ; continue ; }
-      if (line->d.allele[0][1] || line->d.allele[1][1]) { ++nNotSNP ; continue ; }
+      if (line->n_allele > 2) { ++*multi ; continue ; }
+      if (line->d.allele[0][1] || line->d.allele[1][1]) { ++*nonSNP ; continue ; }
       
       // get GTs
       int ngt = bcf_get_genotypes(hr, line, &gt_arr, &ngt_arr) ;
@@ -68,8 +68,6 @@ Vcf *vcfRead (char *filename)  /* read GTs from vcf/bcf using htslib */
 	}
       s->gt[nSample] = 0 ;
     }
-  printf ("read %d sites for %d samples from VCF file %s\n", arrayMax(v->sites), nSample, filename) ;
-  printf ("  ignored %d multi-allelic sites, and %d non-SNP sites\n", nMultipleAllele, nNotSNP) ;
 
   bcf_sr_destroy (sr) ;
   
