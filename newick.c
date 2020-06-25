@@ -5,7 +5,7 @@
  * Description: based on Matt Rasmussen's http://compbio.mit.edu/spimap/pub/spimap/src/newick.cpp
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 19 16:10 2019 (rd109)
+ * Last edited: Jun 25 10:48 2020 (rd109)
  * Created: Fri Nov 15 19:17:14 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -76,6 +76,10 @@ static TreeNode *readBinarySubTree (FILE *f, TreeNode *parent)
 	case ':': // parse length
 	  if (n->length) die ("double length specification in newick file") ;
 	  fscanf (f, "%lf", &n->length) ;
+	  if (!n->length)
+	    { fprintf (stderr, "branch length 0 converted to 1e-8\n") ;
+	      n->length = 1.0e-8 ;
+	    }
 	  break ;
 	default:
 	  if (n->name || n->length) die ("incorrect name syntax in newick file") ;
