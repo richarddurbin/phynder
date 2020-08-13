@@ -5,7 +5,7 @@
  * Description: likelihood applications on trees for ancient Y data and more
  * Exported functions:
  * HISTORY:
- * Last edited: May 16 19:07 2020 (rd109)
+ * Last edited: Aug 13 11:44 2020 (rd109)
  * Created: Sun Nov 17 19:52:20 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -105,6 +105,8 @@ int main (int argc, char *argv[])
   baseMap['c'] = baseMap['C'] = 1 ;
   baseMap['g'] = baseMap['G'] = 2 ;
   baseMap['t'] = baseMap['T'] = 3 ;
+  baseMap['0'] = 0 ;
+  baseMap['1'] = 1 ;
 
   char *command = commandLine (argc, argv) ;
   --argc ; ++argv ; // absorb executable name
@@ -196,12 +198,17 @@ int main (int argc, char *argv[])
 	tree2vcf[i] = j ;
 	leafFound[i] = TRUE ;
       }
+  BOOL isMissingSample = FALSE ;
   for (i = 0 ; i < arrayMax(t->a) ; ++i)
     if (!arrp(t->a,i,TreeElement)->left && !leafFound[i])
       { char *name = dictName (t->nameDict, i) ;
-	if (!dictFind (vt->samples, name, &j)) die ("missing sample %s in tree vcf\n", name) ;
+	if (!dictFind (vt->samples, name, &j))
+	  { fprintf (stderr, "missing sample '%s' in tree vcf\n", name) ;
+	    isMissingSample = TRUE ;
+	  }
 	else die ("problem connecting tree leaf %s i %d to vcf sample j %d", name, i, j) ;
       }
+  if (isMissingSample) die ("missing samples in tree vcf file") ;
   free (leafFound) ;
   
   // build scores for each site for each node in tree
@@ -222,7 +229,7 @@ int main (int argc, char *argv[])
   for (i = 0 ; i < arrayMax(vt->sites) ; ++i)
     { VcfSite *s = arrp(vt->sites, i, VcfSite) ;
       if (!hashAdd (posHash, HASH_INT(POS_HASH(s)), &k) || k != i)
-	die ("problem hashing position %d", i) ;
+	die ("duplicated site in VCF: %d %c %c", s->pos, s->ref, s->alt) ;
 
       { char R = toupper(s->ref), A = toupper(s->alt) ;
 	isTransition[i] = ((R == 'A' && A == 'G') || (R == 'C' && A == 'T') ||

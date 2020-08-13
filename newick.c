@@ -5,7 +5,7 @@
  * Description: based on Matt Rasmussen's http://compbio.mit.edu/spimap/pub/spimap/src/newick.cpp
  * Exported functions:
  * HISTORY:
- * Last edited: Jun 25 10:48 2020 (rd109)
+ * Last edited: Aug 13 12:32 2020 (rd109)
  * Created: Fri Nov 15 19:17:14 2019 (rd109)
  *-------------------------------------------------------------------
  */
@@ -60,10 +60,10 @@ static TreeNode *readBinarySubTree (FILE *f, TreeNode *parent)
   n->parent = parent ;
   if (matchChar (f, '('))
     { n->left = readBinarySubTree (f, n) ;
-      if (!matchChar (f, ',')) die ("missing comma in newick file") ;
+      if (!matchChar (f, ',')) die ("missing comma in newick file (or other format error)") ;
       n->right = readBinarySubTree (f, n) ;
       if (!parent && matchChar(f, ',')) n->parent = readBinarySubTree (f, n) ;
-      if (!matchChar (f, ')')) die ("missing close parenthesis in newick file") ;
+      if (!matchChar (f, ')')) die ("missing close parenthesis in newick file (or other format error)") ;
     }
   while (TRUE)
     { matchChar (f, 0) ;  // absorb whitespace and guarantee next char
