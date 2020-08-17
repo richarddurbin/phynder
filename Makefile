@@ -4,8 +4,10 @@
 CFLAGS= -g				# for debugging
 HTSDIR=../htslib
 CPPFLAGS=-I$(HTSDIR)
+
 HTSLIB=$(HTSDIR)/libhts.a
-LDLIBS=$(HTSLIB) -lpthread -lm -lcurl -lz -lbz2 -llzma 
+include $(HTSDIR)/htslib_static.mk
+LDLIBS=$(HTSLIB) -lpthread $(HTSLIB_static_LIBS)
 
 all: phynder
 

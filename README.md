@@ -78,7 +78,7 @@ To obtain phynder:
 ```
 git clone https://github.com/samtools/htslib.git
 cd htslib
-make
+make lib-static htslib_static.mk
 cd ..
 git clone https://github.com/richarddurbin/phynder.git
 cd phynder
